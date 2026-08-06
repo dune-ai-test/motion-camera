@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.RectF
 import android.net.Uri
+import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
@@ -25,7 +26,6 @@ import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
-import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
@@ -47,8 +47,10 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 interface SessionListener {
@@ -96,6 +98,7 @@ class CameraSession(
 
     private var lastFrame: IntArray? = null
     private var recording: Recording? = null
+    private var pendingVideoFile: File? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val stopRecordingRunnable = Runnable { stopVideo() }
 
@@ -394,25 +397,14 @@ class CameraSession(
     private fun startVideo() {
         if (recording != null) return
         val video = videoCapture ?: return
-        Log.d("MotionCapture", "startVideo saveTo=${settings.saveTo}")
-        val pending = if (settings.saveTo == SaveDestination.APP) {
-            val dir = File(context.filesDir, "MotionCaptureVideos").apply { mkdirs() }
-            val file = File(dir, videoFileName())
-            video.output.prepareRecording(
-                context,
-                FileOutputOptions.Builder(file).build(),
-            )
-        } else {
-            video.output.prepareRecording(
-                context,
-                MediaStoreOutputOptions.Builder(
-                    context.contentResolver,
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                )
-                    .setContentValues(videoStoreValues())
-                    .build(),
-            )
-        }
+        val file = videoOutputFile()
+        file.parentFile?.mkdirs()
+        Log.d("MotionCapture", "startVideo saveTo=${settings.saveTo} file=$file")
+        val pending = video.output.prepareRecording(
+            context,
+            FileOutputOptions.Builder(file).build(),
+        )
+        pendingVideoFile = file
         recording = pending.start(
             executor ?: ContextCompat.getMainExecutor(context),
         ) { event -> onVideoEvent(event) }
@@ -424,18 +416,96 @@ class CameraSession(
         Log.d("MotionCapture", "video event: $event")
         if (event is VideoRecordEvent.Finalize) {
             mainHandler.removeCallbacks(stopRecordingRunnable)
+            val file = pendingVideoFile
+            pendingVideoFile = null
             recording = null
             listener.onRecordingState(false)
             if (event.hasError()) {
                 listener.onError(videoErrorDescription(event.error, event.cause))
+            } else if (file == null || !file.exists()) {
+                listener.onError("Video failed: no output file produced")
             } else {
-                listener.onCaptureComplete(event.outputResults.outputUri, true)
+                listener.onCaptureComplete(publishVideo(file), true)
             }
         }
     }
 
     private fun stopVideo() {
         recording?.stop()
+    }
+
+    private fun videoOutputFile(): File {
+        val name = videoFileName()
+        return when (settings.saveTo) {
+            SaveDestination.APP ->
+                File(File(context.filesDir, "MotionCaptureVideos"), name)
+            SaveDestination.MEDIA_STORE ->
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    File(
+                        File(
+                            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                            "Motion Capture",
+                        ),
+                        name,
+                    )
+                } else {
+                    File(
+                        File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), "MotionCaptureVideos"),
+                        name,
+                    )
+                }
+        }
+    }
+
+    private fun publishVideo(file: File): Uri? {
+        return try {
+            when (settings.saveTo) {
+                SaveDestination.APP -> Uri.fromFile(file)
+                SaveDestination.MEDIA_STORE ->
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                        scanIntoMediaStore(file)
+                    } else {
+                        copyIntoMediaStore(file)
+                    }
+            }
+        } catch (e: Exception) {
+            Log.e("MotionCapture", "Video publish failed", e)
+            Uri.fromFile(file)
+        }
+    }
+
+    private fun scanIntoMediaStore(file: File): Uri? {
+        var result: Uri? = null
+        val latch = CountDownLatch(1)
+        MediaScannerConnection.scanFile(
+            context,
+            arrayOf(file.absolutePath),
+            arrayOf("video/mp4"),
+        ) { _, uri ->
+            result = uri
+            latch.countDown()
+        }
+        if (latch.await(5, TimeUnit.SECONDS)) {
+            return result ?: Uri.fromFile(file)
+        }
+        return Uri.fromFile(file)
+    }
+
+    private fun copyIntoMediaStore(file: File): Uri? {
+        val resolver = context.contentResolver
+        val uri = resolver.insert(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            videoStoreValues(),
+        ) ?: return Uri.fromFile(file)
+        val out = resolver.openOutputStream(uri)
+        if (out == null) return Uri.fromFile(file)
+        try {
+            file.inputStream().use { it.copyTo(out) }
+        } finally {
+            out.close()
+        }
+        file.delete()
+        return uri
     }
 
     private fun videoErrorDescription(code: Int, cause: Throwable?): String {
