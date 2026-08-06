@@ -424,7 +424,7 @@ class CameraSession(
             recording = null
             listener.onRecordingState(false)
             if (event.hasError()) {
-                listener.onError("Video failed: ${event.errorToString}")
+                listener.onError("Video failed: ${event.errorToString()}")
                 listener.onCaptureComplete(null, false)
             } else {
                 listener.onCaptureComplete(event.outputResults.outputUri, true)
