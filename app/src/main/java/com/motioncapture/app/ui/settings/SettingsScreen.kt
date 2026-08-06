@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.motioncapture.app.data.CaptureMode
 import com.motioncapture.app.data.SaveDestination
 import com.motioncapture.app.data.Sensitivity
 import com.motioncapture.app.ui.MainViewModel
@@ -136,6 +137,12 @@ fun SettingsScreen(
             SectionHeader("CAPTURE")
             SettingsGroup {
                 SettingsRow(
+                    label = "Capture Mode",
+                    value = settings.captureMode.label,
+                    onClick = { dialog = SettingsDialog.CAPTURE_MODE },
+                )
+                RowDividerLine()
+                SettingsRow(
                     label = "Capture Burst",
                     value = burstLabel(settings.burstCount),
                     onClick = { dialog = SettingsDialog.BURST },
@@ -170,6 +177,18 @@ fun SettingsScreen(
     }
 
     when (dialog) {
+        SettingsDialog.CAPTURE_MODE -> OptionDialog(
+            title = "Capture Mode",
+            options = CaptureMode.entries.map { it.label },
+            selected = settings.captureMode.label,
+            onSelect = { label ->
+                CaptureMode.entries.firstOrNull { it.label == label }?.let {
+                    viewModel.setCaptureMode(it)
+                }
+            },
+            onDismiss = { dialog = null },
+        )
+
         SettingsDialog.SENSITIVITY -> OptionDialog(
             title = "Detection Sensitivity",
             options = Sensitivity.entries.map { it.label },
@@ -218,7 +237,7 @@ fun SettingsScreen(
     }
 }
 
-private enum class SettingsDialog { SENSITIVITY, PEOPLE_ONLY, BURST, SAVE_TO }
+private enum class SettingsDialog { CAPTURE_MODE, SENSITIVITY, PEOPLE_ONLY, BURST, SAVE_TO }
 
 private fun burstLabel(count: Int): String = if (count == 1) "1 photo" else "$count photos"
 

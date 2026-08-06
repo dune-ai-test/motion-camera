@@ -65,6 +65,7 @@ import com.motioncapture.app.ui.theme.LabelGray
 import com.motioncapture.app.ui.theme.LabelSecondaryLight
 import com.motioncapture.app.ui.theme.SystemGreen
 import com.motioncapture.app.ui.theme.SystemOrange
+import com.motioncapture.app.ui.theme.SystemRed
 import com.motioncapture.app.ui.theme.ToastBackground
 import java.util.Locale
 
@@ -223,18 +224,31 @@ private fun CameraTopBar(state: UiState, viewModel: MainViewModel) {
         ) {
             StatusDot(
                 color = when {
+                    state.recording -> SystemRed
                     !state.analyzing -> SystemOrange
                     state.detection?.objects?.isNotEmpty() == true -> SystemGreen
                     else -> LabelGray
                 },
             )
             Text(
-                text = if (state.analyzing) "Detecting" else "Paused",
+                text = when {
+                    state.recording -> "Recording"
+                    state.analyzing -> "Live"
+                    else -> "Idle"
+                },
                 color = Color.White,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
             )
-            if (state.analyzing) {
+            if (state.recording) {
+                Text(
+                    text = "REC",
+                    color = SystemRed,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp,
+                )
+            } else if (state.analyzing) {
                 Text(
                     text = "LIVE",
                     color = Color.White,
@@ -520,7 +534,7 @@ private fun ShutterGroup(analyzing: Boolean, onClick: () -> Unit) {
                 },
         )
         Text(
-            text = if (analyzing) "Tap to pause" else "Tap to resume",
+            text = if (analyzing) "Tap to stop" else "Start live",
             color = LabelSecondaryLight,
             fontSize = 10.sp,
             fontWeight = FontWeight.Normal,

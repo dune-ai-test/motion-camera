@@ -11,6 +11,7 @@ import com.motioncapture.app.camera.CameraSession
 import com.motioncapture.app.camera.DetectionResult
 import com.motioncapture.app.camera.SessionListener
 import com.motioncapture.app.data.AppSettings
+import com.motioncapture.app.data.CaptureMode
 import com.motioncapture.app.data.GalleryItem
 import com.motioncapture.app.data.GalleryRepository
 import com.motioncapture.app.data.SaveDestination
@@ -28,7 +29,8 @@ enum class Screen { CAMERA, GALLERY, SETTINGS }
 
 data class UiState(
     val screen: Screen = Screen.CAMERA,
-    val analyzing: Boolean = true,
+    val analyzing: Boolean = false,
+    val recording: Boolean = false,
     val flashOn: Boolean = false,
     val frontCamera: Boolean = false,
     val detection: DetectionResult? = null,
@@ -79,6 +81,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             session = CameraSession(app.applicationContext, sessionListener)
         }
         session?.start(lifecycleOwner, previewView)
+        session?.setAnalyzing(_uiState.value.analyzing)
         session?.setSettings(_uiState.value.settings)
     }
 
@@ -135,6 +138,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { prefs.setNotifications(value) }
     }
 
+    fun setCaptureMode(value: CaptureMode) {
+        viewModelScope.launch { prefs.setCaptureMode(value) }
+    }
+
     override fun onCleared() {
         super.onCleared()
         session?.shutdown()
@@ -159,6 +166,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         override fun onError(message: String) {
             _uiState.update { it.copy(errorMessage = message) }
+        }
+
+        override fun onRecordingState(recording: Boolean) {
+            _uiState.update { it.copy(recording = recording) }
         }
     }
 

@@ -4,11 +4,12 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
-import android.graphics.PointF
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Size
@@ -19,7 +20,17 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FallbackStrategy
+import androidx.camera.video.FileOutputOptions
+import androidx.camera.video.MediaStoreOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.Recording
+import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -29,6 +40,7 @@ import com.google.mlkit.vision.objects.ObjectDetection
 import com.google.mlkit.vision.objects.ObjectDetector
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 import com.motioncapture.app.data.AppSettings
+import com.motioncapture.app.data.CaptureMode
 import com.motioncapture.app.data.SaveDestination
 import java.io.File
 import java.text.SimpleDateFormat
@@ -36,12 +48,13 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import kotlin.math.sqrt
+import kotlin.math.abs
 
 interface SessionListener {
     fun onDetectionResult(result: DetectionResult)
     fun onCaptureComplete(savedUri: Uri?, success: Boolean)
     fun onError(message: String)
+    fun onRecordingState(recording: Boolean)
 }
 
 data class DetectedObjectData(
@@ -65,6 +78,7 @@ class CameraSession(
     private var preview: Preview? = null
     private var imageAnalysis: ImageAnalysis? = null
     private var imageCapture: ImageCapture? = null
+    private var videoCapture: VideoCapture<Recorder>? = null
     private var camera: Camera? = null
     private var detector: ObjectDetector? = null
     private var executor: ExecutorService? = null
@@ -79,7 +93,11 @@ class CameraSession(
     private var facing = CameraSelector.LENS_FACING_BACK
     private var settings = AppSettings()
 
-    private var lastCenter: PointF? = null
+    private var lastFrame: IntArray? = null
+    private var recording: Recording? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val stopRecordingRunnable = Runnable { stopVideo() }
+
     private var lastAnalysisTime = 0L
     private var lastCaptureTime = 0L
     private var burstInProgress = false
@@ -122,7 +140,7 @@ class CameraSession(
     fun setAnalyzing(enabled: Boolean) {
         analyzing = enabled
         if (!enabled) {
-            lastCenter = null
+            lastFrame = null
         }
     }
 
@@ -132,7 +150,13 @@ class CameraSession(
     }
 
     fun setSettings(settings: AppSettings) {
+        val modeChanged = settings.captureMode != this.settings.captureMode
         this.settings = settings
+        if (modeChanged && bound) {
+            stopVideo()
+            lastFrame = null
+            bindUseCases()
+        }
     }
 
     fun toggleCamera() {
@@ -141,11 +165,15 @@ class CameraSession(
         } else {
             CameraSelector.LENS_FACING_BACK
         }
-        lastCenter = null
-        if (bound) bindUseCases()
+        lastFrame = null
+        if (bound) {
+            stopVideo()
+            bindUseCases()
+        }
     }
 
     fun shutdown() {
+        stopVideo()
         executor?.shutdown()
         cameraProvider?.unbindAll()
         detector?.close()
@@ -159,27 +187,49 @@ class CameraSession(
         provider.unbindAll()
         try {
             val selector = CameraSelector.Builder().requireLensFacing(facing).build()
+            val analysisExecutor = executor ?: return
+            val useCases = mutableListOf<UseCase>()
 
-            preview = Preview.Builder().build().also {
+            val previewUC = Preview.Builder().build().also {
                 it.setSurfaceProvider(view.surfaceProvider)
             }
+            preview = previewUC
+            useCases.add(previewUC)
 
-            val analysisExecutor = executor ?: return
-
-            imageAnalysis = ImageAnalysis.Builder()
+            val analysisUC = ImageAnalysis.Builder()
                 .setTargetResolution(Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-            imageAnalysis?.setAnalyzer(analysisExecutor) { proxy -> analyzeFrame(proxy) }
+            imageAnalysis = analysisUC
+            analysisUC.setAnalyzer(analysisExecutor) { proxy -> analyzeFrame(proxy) }
+            useCases.add(analysisUC)
 
-            imageCapture = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                .setFlashMode(
-                    if (flashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
+            if (settings.captureMode == CaptureMode.PHOTO) {
+                val captureUC = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .setFlashMode(
+                        if (flashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
+                    )
+                    .build()
+                imageCapture = captureUC
+                useCases.add(captureUC)
+            } else {
+                val videoUC = VideoCapture.withOutput(
+                    Recorder.Builder()
+                        .setExecutor(analysisExecutor)
+                        .setQualitySelector(
+                            QualitySelector.fromOrderedList(
+                                listOf(Quality.SD, Quality.LOWEST),
+                                FallbackStrategy.higherQualityOrLowerThan(Quality.SD),
+                            )
+                        )
+                        .build()
                 )
-                .build()
+                videoCapture = videoUC
+                useCases.add(videoUC)
+            }
 
-            camera = provider.bindToLifecycle(owner, selector, preview, imageAnalysis, imageCapture)
+            camera = provider.bindToLifecycle(owner, selector, *useCases.toTypedArray())
             camera?.cameraControl?.enableTorch(flashEnabled)
             bound = true
         } catch (e: Exception) {
@@ -204,14 +254,20 @@ class CameraSession(
         val bitmap = rotateIfNeeded(raw, rotation)
         if (bitmap.width == 0 || bitmap.height == 0) return
 
+        val motion = detectPixelMotion(bitmap)
+
         val image = InputImage.fromBitmap(bitmap, 0)
         detector?.process(image)
             ?.addOnSuccessListener { objects ->
-                onDetections(objects, bitmap.width, bitmap.height)
+                onDetections(objects, bitmap.width, bitmap.height, motion)
             }
             ?.addOnFailureListener {
                 // Ignore individual frame failures; keep streaming.
             }
+
+        if (motion) {
+            triggerCapture()
+        }
     }
 
     private fun rotateIfNeeded(src: Bitmap, rotation: Int): Bitmap {
@@ -221,7 +277,46 @@ class CameraSession(
         return Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
     }
 
-    private fun onDetections(objects: List<DetectedObject>, imgW: Int, imgH: Int) {
+    private fun detectPixelMotion(bitmap: Bitmap): Boolean {
+        val current = downscaleToLuma(bitmap)
+        val score = motionScore(current, lastFrame)
+        lastFrame = current
+        return score >= settings.sensitivity.motionFraction
+    }
+
+    private fun downscaleToLuma(src: Bitmap): IntArray {
+        val cols = MOTION_GRID_COLS
+        val rows = MOTION_GRID_ROWS
+        val scaled = if (src.width == cols && src.height == rows) {
+            src
+        } else {
+            Bitmap.createScaledBitmap(src, cols, rows, true)
+        }
+        val pixels = IntArray(cols * rows)
+        scaled.getPixels(pixels, 0, cols, 0, 0, cols, rows)
+        if (scaled !== src) {
+            scaled.recycle()
+        }
+        val luma = IntArray(cols * rows)
+        for (i in pixels.indices) {
+            val c = pixels[i]
+            luma[i] = (((c shr 16) and 0xFF) * 299 + ((c shr 8) and 0xFF) * 587 + (c and 0xFF) * 114) / 1000
+        }
+        return luma
+    }
+
+    private fun motionScore(current: IntArray, previous: IntArray?): Float {
+        if (previous == null || previous.size != current.size) return 0f
+        var changed = 0
+        for (i in current.indices) {
+            if (abs(current[i] - previous[i]) > MOTION_PIXEL_DIFF) {
+                changed++
+            }
+        }
+        return changed.toFloat() / current.size
+    }
+
+    private fun onDetections(objects: List<DetectedObject>, imgW: Int, imgH: Int, motion: Boolean) {
         if (imgW == 0 || imgH == 0) return
 
         val detections = objects.mapNotNull { obj ->
@@ -251,43 +346,19 @@ class CameraSession(
             detections
         }
 
-        val largest = filtered.maxByOrNull { it.box.width() * it.box.height() }
-        val motion = detectMotion(largest, imgW, imgH)
-
         listener.onDetectionResult(
             DetectionResult(filtered, motion, imgW.toFloat() / imgH.toFloat())
         )
-
-        if (motion && largest != null && analyzing) {
-            triggerCapture()
-        }
-    }
-
-    private fun detectMotion(target: DetectedObjectData?, imgW: Int, imgH: Int): Boolean {
-        if (target == null) {
-            lastCenter = null
-            return false
-        }
-        val center = PointF(
-            target.box.centerX() * imgW,
-            target.box.centerY() * imgH,
-        )
-        val prev = lastCenter
-        lastCenter = center
-        if (prev == null) return false
-
-        val dx = center.x - prev.x
-        val dy = center.y - prev.y
-        return sqrt(dx * dx + dy * dy) > settings.sensitivity.motionThresholdPx
     }
 
     private fun triggerCapture() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastCaptureTime < CAPTURE_COOLDOWN_MS) return
-        if (burstInProgress) return
         lastCaptureTime = now
-        burstInProgress = true
-        captureBurst(settings.burstCount)
+        when (settings.captureMode) {
+            CaptureMode.PHOTO -> captureBurst(settings.burstCount)
+            CaptureMode.VIDEO -> startVideo()
+        }
     }
 
     private fun captureBurst(remaining: Int) {
@@ -319,6 +390,51 @@ class CameraSession(
         )
     }
 
+    private fun startVideo() {
+        if (recording != null) return
+        val video = videoCapture ?: return
+        val pending = if (settings.saveTo == SaveDestination.APP) {
+            val dir = File(context.filesDir, "MotionCaptureVideos").apply { mkdirs() }
+            val file = File(dir, videoFileName())
+            video.output.prepareRecording(
+                context,
+                FileOutputOptions.Builder(file).build(),
+            )
+        } else {
+            video.output.prepareRecording(
+                context,
+                MediaStoreOutputOptions.Builder(
+                    context.contentResolver,
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                )
+                    .setContentValues(videoStoreValues())
+                    .build(),
+            )
+        }
+        recording = pending.start(
+            executor ?: ContextCompat.getMainExecutor(context),
+        ) { event -> onVideoEvent(event) }
+        listener.onRecordingState(true)
+        mainHandler.postDelayed(stopRecordingRunnable, VIDEO_CLIP_MS)
+    }
+
+    private fun onVideoEvent(event: VideoRecordEvent) {
+        if (event is VideoRecordEvent.Finalize) {
+            mainHandler.removeCallbacks(stopRecordingRunnable)
+            recording = null
+            listener.onRecordingState(false)
+            if (event.hasError()) {
+                listener.onCaptureComplete(null, false)
+            } else {
+                listener.onCaptureComplete(event.outputResults.outputUri, true)
+            }
+        }
+    }
+
+    private fun stopVideo() {
+        recording?.stop()
+    }
+
     private fun outputOptions(): ImageCapture.OutputFileOptions {
         return if (settings.saveTo == SaveDestination.APP) {
             val dir = File(context.filesDir, "MotionCapture").apply { mkdirs() }
@@ -338,6 +454,11 @@ class CameraSession(
         return "MotionCapture_$stamp.jpg"
     }
 
+    private fun videoFileName(): String {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        return "MotionCapture_$stamp.mp4"
+    }
+
     private fun mediaStoreValues(): ContentValues {
         val now = System.currentTimeMillis()
         return ContentValues().apply {
@@ -353,9 +474,28 @@ class CameraSession(
         }
     }
 
+    private fun videoStoreValues(): ContentValues {
+        val now = System.currentTimeMillis()
+        return ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, videoFileName())
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.DATE_ADDED, now / 1000L)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(
+                    MediaStore.Video.Media.RELATIVE_PATH,
+                    "${Environment.DIRECTORY_PICTURES}/Motion Capture",
+                )
+            }
+        }
+    }
+
     companion object {
         private const val FRAME_INTERVAL_MS = 120L
-        private const val CAPTURE_COOLDOWN_MS = 1800L
+        private const val CAPTURE_COOLDOWN_MS = 2500L
         private const val MIN_CONFIDENCE = 0.55f
+        private const val VIDEO_CLIP_MS = 10_000L
+        private const val MOTION_GRID_COLS = 64
+        private const val MOTION_GRID_ROWS = 48
+        private const val MOTION_PIXEL_DIFF = 20
     }
 }
