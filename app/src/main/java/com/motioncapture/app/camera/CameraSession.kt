@@ -18,9 +18,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
-import androidx.camera.core.MediaStoreOutputOptions
 import androidx.camera.core.Preview
-import androidx.camera.core.toBitmap
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -99,8 +97,8 @@ class CameraSession(
         detector = ObjectDetection.getClient(
             ObjectDetectorOptions.Builder()
                 .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
-                .setClassificationMode(ObjectDetectorOptions.SINGLE_LABEL_MODE)
-                .setMultipleObjectsEnabled(true)
+                .enableMultipleObjects()
+                .enableClassification()
                 .build()
         )
 
@@ -166,11 +164,13 @@ class CameraSession(
                 it.setSurfaceProvider(view.surfaceProvider)
             }
 
+            val analysisExecutor = executor ?: return
+
             imageAnalysis = ImageAnalysis.Builder()
                 .setTargetResolution(Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-            imageAnalysis?.setAnalyzer(executor) { proxy -> analyzeFrame(proxy) }
+            imageAnalysis?.setAnalyzer(analysisExecutor) { proxy -> analyzeFrame(proxy) }
 
             imageCapture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
@@ -234,10 +234,10 @@ class CameraSession(
                 label = label,
                 confidence = confidence,
                 box = RectF(
-                    box.left / imgW,
-                    box.top / imgH,
-                    box.right / imgW,
-                    box.bottom / imgH,
+                    box.left.toFloat() / imgW,
+                    box.top.toFloat() / imgH,
+                    box.right.toFloat() / imgW,
+                    box.bottom.toFloat() / imgH,
                 ),
             )
         }
@@ -326,12 +326,9 @@ class CameraSession(
             ImageCapture.OutputFileOptions.Builder(file).build()
         } else {
             ImageCapture.OutputFileOptions.Builder(
-                MediaStoreOutputOptions.Builder(
-                    context.contentResolver,
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                )
-                    .setContentValues(mediaStoreValues())
-                    .build()
+                context.contentResolver,
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                mediaStoreValues(),
             ).build()
         }
     }
