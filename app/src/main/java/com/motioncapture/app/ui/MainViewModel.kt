@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.motioncapture.app.MotionCaptureApplication
 import com.motioncapture.app.camera.CameraSession
 import com.motioncapture.app.camera.DetectionResult
+import com.motioncapture.app.camera.SessionListener
 import com.motioncapture.app.data.AppSettings
 import com.motioncapture.app.data.GalleryItem
 import com.motioncapture.app.data.GalleryRepository
