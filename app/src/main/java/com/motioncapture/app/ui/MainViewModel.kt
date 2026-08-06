@@ -2,6 +2,7 @@ package com.motioncapture.app.ui
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.camera.view.PreviewView
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
@@ -165,7 +166,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         override fun onError(message: String) {
+            Log.e("MotionCapture", message)
             _uiState.update { it.copy(errorMessage = message) }
+            showToast(message)
         }
 
         override fun onRecordingState(recording: Boolean) {

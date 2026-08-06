@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.MediaStore
+import android.util.Log
 import android.util.Size
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -393,6 +394,7 @@ class CameraSession(
     private fun startVideo() {
         if (recording != null) return
         val video = videoCapture ?: return
+        Log.d("MotionCapture", "startVideo saveTo=${settings.saveTo}")
         val pending = if (settings.saveTo == SaveDestination.APP) {
             val dir = File(context.filesDir, "MotionCaptureVideos").apply { mkdirs() }
             val file = File(dir, videoFileName())
@@ -419,13 +421,13 @@ class CameraSession(
     }
 
     private fun onVideoEvent(event: VideoRecordEvent) {
+        Log.d("MotionCapture", "video event: $event")
         if (event is VideoRecordEvent.Finalize) {
             mainHandler.removeCallbacks(stopRecordingRunnable)
             recording = null
             listener.onRecordingState(false)
             if (event.hasError()) {
                 listener.onError(videoErrorDescription(event.error, event.cause))
-                listener.onCaptureComplete(null, false)
             } else {
                 listener.onCaptureComplete(event.outputResults.outputUri, true)
             }
