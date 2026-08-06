@@ -439,7 +439,7 @@ class CameraSession(
         return when (settings.saveTo) {
             SaveDestination.APP ->
                 File(File(context.filesDir, "MotionCaptureVideos"), name)
-            SaveDestination.MEDIA_STORE ->
+            SaveDestination.PHOTOS ->
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                     File(
                         File(
@@ -464,7 +464,7 @@ class CameraSession(
         return try {
             when (settings.saveTo) {
                 SaveDestination.APP -> Uri.fromFile(file)
-                SaveDestination.MEDIA_STORE ->
+                SaveDestination.PHOTOS ->
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                         scanIntoMediaStore(file)
                     } else {
