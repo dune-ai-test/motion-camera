@@ -157,7 +157,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             viewModelScope.launch {
                 if (success && savedUri != null) {
                     prefs.setLastCaptureTime(System.currentTimeMillis())
-                    showToast("Saved to Photos")
+                    showToast("Capture saved")
                     refreshStats()
                 } else {
                     showToast("Capture failed")

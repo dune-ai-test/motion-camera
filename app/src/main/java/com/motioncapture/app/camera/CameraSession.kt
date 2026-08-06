@@ -425,7 +425,9 @@ class CameraSession(
             } else if (file == null || !file.exists()) {
                 listener.onError("Video failed: no output file produced")
             } else {
-                listener.onCaptureComplete(publishVideo(file), true)
+                val uri = publishVideo(file)
+                Log.d("MotionCapture", "video saved to: $uri")
+                listener.onCaptureComplete(uri, true)
             }
         }
     }

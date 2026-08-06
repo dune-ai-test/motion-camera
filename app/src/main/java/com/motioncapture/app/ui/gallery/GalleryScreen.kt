@@ -1,6 +1,7 @@
 package com.motioncapture.app.ui.gallery
 
 import androidx.activity.compose.BackHandler
+import android.widget.VideoView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,10 +25,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,9 +41,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -96,7 +101,7 @@ fun GalleryScreen(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "${items.size} photos",
+                text = "${items.size} captures",
                 color = LabelGray,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Normal,
@@ -137,16 +142,20 @@ fun GalleryScreen(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 items(items, key = { it.uri.toString() }) { item ->
-                    AsyncImage(
-                        model = item.uri,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { selectedItem = item },
-                    )
+                    if (item.isVideo) {
+                        VideoTile(onClick = { selectedItem = item })
+                    } else {
+                        AsyncImage(
+                            model = item.uri,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { selectedItem = item },
+                        )
+                    }
                 }
             }
         }
@@ -158,6 +167,44 @@ fun GalleryScreen(
 }
 
 @Composable
+private fun VideoTile(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.Black)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.PlayArrow,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.size(42.dp),
+        )
+    }
+}
+
+@Composable
+private fun VideoPlayer(item: GalleryItem) {
+    val context = LocalContext.current
+    val videoView = remember { VideoView(context) }
+    DisposableEffect(Unit) {
+        onDispose { videoView.stopPlayback() }
+    }
+    AndroidView(
+        factory = {
+            videoView.apply {
+                setVideoURI(item.uri)
+                setOnPreparedListener { it.setVolume(0f, 0f); it.start() }
+            }
+        },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
+@Composable
 private fun PhotoViewerDialog(item: GalleryItem, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Box(
@@ -166,12 +213,16 @@ private fun PhotoViewerDialog(item: GalleryItem, onDismiss: () -> Unit) {
                 .background(Color.Black)
                 .clickable(onClick = onDismiss),
         ) {
-            AsyncImage(
-                model = item.uri,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-            )
+            if (item.isVideo) {
+                VideoPlayer(item)
+            } else {
+                AsyncImage(
+                    model = item.uri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             IconButton(
                 onClick = onDismiss,
                 modifier = Modifier
