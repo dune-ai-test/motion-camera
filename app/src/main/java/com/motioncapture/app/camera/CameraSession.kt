@@ -450,7 +450,10 @@ class CameraSession(
                     )
                 } else {
                     File(
-                        File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), "MotionCaptureVideos"),
+                        File(
+                            context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir,
+                            "MotionCaptureVideos",
+                        ),
                         name,
                     )
                 }
