@@ -357,7 +357,7 @@ class CameraSession(
         lastCaptureTime = now
         when (settings.captureMode) {
             CaptureMode.PHOTO -> captureBurst(settings.burstCount)
-            CaptureMode.VIDEO -> startVideo()
+            CaptureMode.VIDEO -> mainHandler.post { startVideo() }
         }
     }
 
@@ -424,6 +424,7 @@ class CameraSession(
             recording = null
             listener.onRecordingState(false)
             if (event.hasError()) {
+                listener.onError("Video failed: ${event.errorToString}")
                 listener.onCaptureComplete(null, false)
             } else {
                 listener.onCaptureComplete(event.outputResults.outputUri, true)
