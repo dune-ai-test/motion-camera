@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <include
+        domain="file"
+        path="." />
+    <include
+        domain="database"
+        path="." />
+    <include
+        domain="sharedpref"
+        path="." />
+    <exclude
+        domain="file"
+        path="MotionCapture/" />
+</full-backup-content>
